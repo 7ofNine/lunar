@@ -109,3 +109,4 @@ EXPORTS
    mutant_hex_char_to_int                 @108
    int_to_mutant_hex_char                 @109
    unpack_mpc_desig                       @110
+   text_search_and_replace                @111
