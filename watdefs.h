@@ -53,9 +53,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 #define NEAR
 #endif
 
-#ifndef PASCAL
-#define PASCAL
-#endif
+//#ifndef PASCAL  I don't see any reason to still support watcom all the other attributes should also be removed
+//#define PASCAL
+//#endif
 
 #define FMEMCPY      memcpy
 #define FMEMCMP      memcmp
