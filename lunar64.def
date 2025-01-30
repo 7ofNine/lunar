@@ -136,6 +136,7 @@ EXPORTS
    output_signed_angle_to_buff            @135
    output_angle_to_buff                   @136
    phase_angle_correction_to_magnitude    @137
+   get_satellite_offset                   @138
    
    
     
