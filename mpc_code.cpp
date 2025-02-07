@@ -307,12 +307,13 @@ static void _set_parallax_constants( mpc_code_t *cinfo)
 int get_mpc_code_info( mpc_code_t *cinfo, const char *buff)
 {
    int i = 0, rval = -1;
+   const size_t slen = strlen( buff);
 
    while( buff[i] > ' ' && buff[i] <= '~' && buff[i] != '!')
       i++;
    memset( cinfo, 0, sizeof( mpc_code_t));
    memcpy( cinfo->code, buff, 4);
-   if( i >= 3 && i <= 4 && strlen( buff) >= 30)
+   if( i >= 3 && i <= 4 && slen >= 30)
       {
       rval = 3;         /* assume earth */
 
@@ -343,7 +344,7 @@ int get_mpc_code_info( mpc_code_t *cinfo, const char *buff)
                   cinfo->lat = cinfo->lon = cinfo->alt = 0.;
                }
             cinfo->planet = rval;
-            if( cinfo->lat && cinfo->lon)   /* i.e.,  topocentric */
+            if( cinfo->lat || cinfo->lon || cinfo->alt)   /* i.e.,  topocentric */
                _set_parallax_constants( cinfo);
             }
          }
@@ -376,7 +377,8 @@ int get_mpc_code_info( mpc_code_t *cinfo, const char *buff)
       else
          rval = -1;
       }
-   else if( buff[14] == 'v' && strlen( buff) >= 80 && buff[80] < ' '
+   else if( slen >= 80 && buff[14] == 'v' && buff[80] < ' '
+               && buff[48] == '.' && buff[37] == '.'
                && buff[77] == '2' && (buff[45] == '+' || buff[45] == '-'))
       {              /* roving observer line */
       double lat, lon, alt;
@@ -570,6 +572,7 @@ static int extract_lat_lon( const char *buff, size_t *bytes_read, double *value)
       else if( *tptr == 'f' && tptr[1] == 't')
          {
          const double intl_feet_to_meters = 0.3048;
+/*       const double us_survey_feet_to_meters = 12. / 39.37;   */
 
          tptr += 2;               /* alt given in feet (shudder) */
          rval = GOT_ALT;
