@@ -25,6 +25,7 @@ parsing in my software.
 #include <string.h>
 #include <assert.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <math.h>
 #include "stringex.h"
 #include <stdio.h>
@@ -369,7 +370,7 @@ static inline void pack_mpc_reference( char *packed, const char *ref)
          encode_value_in_mutant_hex( packed + 1, 4, mpc_number - 110000);
          }
       }
-   else if( *ref == '!')
+   else if( *ref == '!' || !memcmp( ref, "JPL", 3))
       {
       memcpy( packed, "     ", 5);
       memcpy( packed, ref, len > 5 ? 5 : len);
@@ -431,6 +432,40 @@ static const char *skip_whitespace( const char *tptr)
    while( *tptr && isspace( *tptr))
       tptr++;
    return( tptr);
+}
+
+/* A spacecraft offset in ADES is an optionally signed number fitting
+in 13 characters.  The old punch-card format puts each coordinate into a
+sign plus ten bytes.  If an offset given in ADES won't fit into the
+punch-card constraint,  the following function converts the digital
+part into a nine-digit base-62 integer.  The lead digit then indicates the
+location of the decimal point (i.e.,  an exponent).  Thus,  we can store
+up to ~16 significant digits.  See unpack_oversized_spacecraft_offset()
+in mpc_fmt.c for the reverse function. */
+
+#define SIXTY_TWO_CUBED ((int64_t)(62*62*62))
+#define SIXTY_TWO_TO_THE_NINTH_POWER (SIXTY_TWO_CUBED * SIXTY_TWO_CUBED * SIXTY_TWO_CUBED)
+
+static void pack_oversized_spacecraft_offset( char *obuff, const char *ibuff)
+{
+   int64_t oval = 0;
+   size_t i, loc = 0;
+
+   *obuff = *ibuff;        /* + or - sign */
+   obuff[1] = 'A';         /* assuming no decimal point */
+   for( i = 1; ibuff[i] && oval < SIXTY_TWO_TO_THE_NINTH_POWER / 10 - 1; i++)
+      if( ibuff[i] >= '0' && ibuff[i] <= '9')
+         oval = oval * 10 + ibuff[i] - '0';
+      else if( ibuff[i] == '.')
+         loc = i;
+   assert( loc);        /* gotta have a decimal point in there */
+   obuff[1] = (char)( 'A' + i - loc);
+   for( i = 10; i > 1; i--)
+      {
+      obuff[i] = int_to_mutant_hex_char( (int)( oval % 62));
+      oval /= 62;
+      }
+   obuff[11] = ' ';
 }
 
 static int get_a_line( char *obuff, const size_t obuff_size, ades2mpc_t *cptr)
@@ -531,8 +566,8 @@ static int get_a_line( char *obuff, const size_t obuff_size, ades2mpc_t *cptr)
          memcpy( cptr->line2, cptr->line, 12);
          memcpy( cptr->line2 + 15, cptr->line + 15, 17);
          if( cptr->spacecraft_center != 399)
-            snprintf_err( cptr->line2 + 69, 9, "%8d", cptr->spacecraft_center);
-         memcpy( cptr->line2 + 77, cptr->line + 77, 3);
+            snprintf_err( cptr->line2 + 69, 4, "%3d", cptr->spacecraft_center);
+         memcpy( cptr->line2 + 72, cptr->line + 72, 8);
          }
       cptr->line[0] = '\0';
       }
@@ -657,6 +692,76 @@ static int process_ades_tag( char *obuff, ades2mpc_t *cptr, const int itag,
          if( *tptr == '*')
             cptr->line[12] = '*';
          break;
+      case ADES_rcv:
+         cptr->line2[0] = ' ';
+         cptr->line2[14] = 'r';
+         cptr->line[14] = 'R';
+         assert( 3 == strlen( name));
+         memcpy( cptr->line + 77, name, 3);
+         break;
+      case ADES_trx:
+         assert( 3 == strlen( name));
+         memcpy( cptr->line + 68, name, 3);
+         memcpy( cptr->line2 + 68, name, 3);
+         break;
+      case ADES_com:
+         cptr->line2[32] = (*name == '1' ? 'C' : 'S');
+         break;
+      case ADES_frq:
+         {
+         const int freq = (int)( atof( name) * 10. + 0.5);
+         const char saved_char = cptr->line[68];
+
+         assert( freq > 10000 && freq < 999999);
+         snprintf( cptr->line + 62, 7, "%6d", freq);
+         cptr->line[68] = saved_char;
+         if( cptr->line[67] == '0')
+            cptr->line[67] = ' ';
+         }
+         break;
+      case ADES_delay:
+      case ADES_rmsDelay:
+         {
+         double value = atof( name);
+         char *loc, saved_char;
+
+         if( ADES_delay == itag)
+            {           /* delay given in _seconds_ in ADES */
+                     /* following are approximate "reasonable limits" */
+            assert( value > 0.1 && value < 3600.);
+            value *= 1000000.;
+            loc = cptr->line;
+            }
+         else           /* delay uncertainty is given in microseconds */
+            {
+            loc = cptr->line2;
+            assert( value > 0.01);
+            }
+         saved_char = loc[47];
+         snprintf( loc + 32, 16, "%15ld", (long)( value * 10000. + 0.5));
+         loc[47] = saved_char;
+         if( loc[46] == '0')
+            loc[46] = ' ';
+         }
+         break;
+      case ADES_doppler:
+      case ADES_rmsDoppler:
+         {
+         double value = atof( name);
+         char *loc = (itag == ADES_doppler ? cptr->line : cptr->line2);
+         const char saved_char = loc[62];
+
+         if( ADES_doppler == itag)
+            {
+            loc[47] = (value > 0. ? '+' : '-');
+            value = fabs( value);
+            }
+         snprintf( loc + 48, 15, "%14ld", (long)( value * 10000. + 0.5));
+         loc[62] = saved_char;
+         if( loc[61] == '0')
+            loc[61] = ' ';
+         }
+         break;
       case ADES_ref:
          if( len < sizeof( name))
             pack_mpc_reference( cptr->line + 72, name);
@@ -724,7 +829,7 @@ static int process_ades_tag( char *obuff, ades2mpc_t *cptr, const int itag,
                strlcpy_err( obuff, "Bad posn data\n", obuff_size);
                rval = 1;
                }
-                     /* cvt scientific notation,  if any : */
+                     /* cvt scientific notation,  if any (NOT VALID ADES) : */
             if( strchr( name, 'e') || strchr( name, 'E'))
                {
                snprintf_err( name, sizeof( name), "%.13f", atof( name));
@@ -742,29 +847,28 @@ static int process_ades_tag( char *obuff, ades2mpc_t *cptr, const int itag,
             if( cptr->line2[32] == '1')
                {
                decimal_loc = sign_loc + 6;
-               if( tptr2 - name >= 7)     /* beyond 100000 km */
-                  decimal_loc++;
-               if( tptr2 - name >= 8)     /* one to ten million km */
-                  decimal_loc++;
-               assert( tptr2 - name < 9);
+               if( tptr2 - name >= 7)     /* 100000 to one billion km */
+                  decimal_loc += (int)( tptr2 - name) - 6;
+               assert( tptr2 - name < 11);
                }
             else if( cptr->line2[32] == '2')
                {
                decimal_loc = sign_loc + 2;
                if( tptr2 - name == 3)     /* beyond 10 AU */
                   decimal_loc++;
-               assert( tptr2 - name < 4);
-               }
+               assert( tptr2 - name < 4);    /* anything beyond 100 AU */
+               }                             /*  is probably an error */
             else
                {
                strlcpy_err( obuff, "Bad posn data\n", obuff_size);
                rval = 1;
                }
-            if( decimal_loc)
+            if( nlen > 11)
+               pack_oversized_spacecraft_offset( &cptr->line2[sign_loc], name);
+            else if( decimal_loc)
                {
                decimal_loc -= (int)(tptr2 - name);
-               memcpy( &cptr->line2[decimal_loc + 1], name + 1,
-                                           (nlen > 11 ? 10 : nlen - 1));
+               memcpy( &cptr->line2[decimal_loc + 1], name + 1, nlen - 1);
                }
             }
          else               /* roving observer */
@@ -1191,8 +1295,8 @@ int xlate_ades2mpc( void *context, char *obuff, const char *buff)
                   if( cptr->depth == MAX_DEPTH)
                      rval = ADES_DEPTH_MAX;
                   }
-               if( tag_idx == ADES_optical)
-                  {
+               if( tag_idx == ADES_optical || tag_idx == ADES_radar)
+                  {     /* may someday handle ADES_offset and/or ADES_occultation */
                   if( tptr[1] == '/')
                      cptr->getting_lines = rval = 1;
                   else
