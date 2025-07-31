@@ -671,13 +671,33 @@ static int pack_provisional_natsat( char *packed, const char *fullname)
    return( -1);
 }
 
+/* See comments for pack_oversized_spacecraft_offset( ) in 'ades2mpc.cpp'
+to understand what's going on here. */
+
+double unpack_oversized_spacecraft_offset( const char *ibuff)
+{
+   uint64_t value = 0;
+   double rval;
+   size_t i, exponent = ibuff[1] - 'B';
+
+   assert( *ibuff == '-' || *ibuff == '+');
+   for( i = 2; i < 11; i++)
+       value = value * 62 + mutant_hex_char_to_int( ibuff[i]);
+   rval = (double)value;
+   while( exponent--)
+      rval *= 0.1;
+   if( *ibuff == '-')
+      rval = -rval;
+   return( rval);
+}
+
 /* Returns either a negative value for an error code,  or the
 location of the decimal point for a valid coordinate */
 
 inline int get_satellite_coordinate( const char *iptr, double coord[1])
 {
-   char tbuff[12];
    const char sign_byte = *iptr;
+   char tbuff[16];
    int rval = 0;
 
    memcpy( tbuff, iptr, 11);
@@ -692,15 +712,23 @@ inline int get_satellite_coordinate( const char *iptr, double coord[1])
       char *tptr;
       int n_bytes_read;
 
-      if( sscanf( tbuff + 1, "%lf%n", coord, &n_bytes_read) != 1
-                     || n_bytes_read < 7)
-         rval = SATELL_COORD_ERR_BAD_NUMBER;
-      else if( (tptr = strchr( tbuff, '.')) == NULL)
-         rval = SATELL_COORD_ERR_NO_DECIMAL;
+      if( iptr[1] >= 'A' && iptr[1] <= 'R')
+         {
+         *coord = unpack_oversized_spacecraft_offset( iptr);
+         rval = 99;
+         }
       else
-         rval = (int)( tptr - tbuff);
-      if( sign_byte == '-')
-         *coord = -*coord;
+         {
+         if( sscanf( tbuff + 1, "%lf%n", coord, &n_bytes_read) != 1
+                    || n_bytes_read < 7)
+            rval = SATELL_COORD_ERR_BAD_NUMBER;
+         else if( (tptr = strchr( tbuff, '.')) == NULL)
+            rval = SATELL_COORD_ERR_NO_DECIMAL;
+         else
+            rval = (int)( tptr - tbuff);
+         if( sign_byte == '-')
+            *coord = -*coord;
+         }
       }
    return( rval);
 }
@@ -715,7 +743,9 @@ int DLL_FUNC get_satellite_offset( const char *iline, double xyz[3])
    double r2 = 0.;
    const double earth_radius_in_au = 6378.14 / AU_IN_KM;
    const double min_radius = 1.01 * earth_radius_in_au;
+#ifndef NDEBUG
    const size_t slen = strlen( iline);
+#endif
 
    assert( 80 <= slen && slen < 83);  /* allow for LF, CR/LF, or no line end */
    for( i = 0; i < 3; i++)    /* in case of error,  use 0 offsets */
@@ -732,7 +762,7 @@ int DLL_FUNC get_satellite_offset( const char *iline, double xyz[3])
          {
          xyz[i] /= AU_IN_KM;
          if( !error_code)
-            if( decimal_loc < 6 || decimal_loc > 8)
+            if( decimal_loc < 6 || decimal_loc > 10)
                error_code = SATELL_COORD_ERR_DECIMAL_MISPLACED;
          if( !error_code && xyz[i] == 0.)
             error_code = SATELL_COORD_ERR_EXACTLY_ZERO;
@@ -745,6 +775,8 @@ int DLL_FUNC get_satellite_offset( const char *iline, double xyz[3])
          }
       else if( !error_code)      /* don't know about this sort of offset */
          error_code = SATELL_COORD_ERR_UNKNOWN_OFFSET;
+      if( decimal_loc == 99)     /* actually okay,  just a very long ADES */
+         error_code = 0;         /* spacecraft offset */
       r2 += xyz[i] * xyz[i];
       }
                /* (275) geocentric occultation obs can have offsets  */
